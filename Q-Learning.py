@@ -92,6 +92,8 @@ class QLearningAgent:
         绘制训练过程中每个回合的总奖励。
         :param rewards_per_episode: 每个回合的总奖励列表。
         """
+        N =self.print_interval  # 平滑窗口大小
+        rewards_per_episode = np.convolve(rewards_per_episode, np.ones(N)/N, mode='valid')
         plt.plot(rewards_per_episode)
         plt.title("Q-Learning Training Rewards")
         plt.xlabel("Episode")
@@ -125,7 +127,6 @@ class CartPoleWrapper(ObservationWrapper):
     def __init__(self, env, max_degrees=None, num_bins=(2, 2, 6, 3)):
         super().__init__(env)
         self.origin_observation_space = env.observation_space
-        # 定义每个维度离散化的“桶”的数量
         self.num_bins = num_bins
         self.init_bins()
         if max_degrees is not None:
@@ -174,22 +175,27 @@ class CartPoleWrapper(ObservationWrapper):
         env.unwrapped.theta_threshold_radians = max_degrees * (math.pi / 180)
         logger.info(f"杆子倾斜角度限制已设置为 ±{max_degrees} 度 ({env.unwrapped.theta_threshold_radians:.4f} 弧度)")
 
+def test():
+    logger.remove()
+    logger.add(sys.stderr, level="INFO")
+    # logger.level("INFO")
 
-logger.remove()
-logger.add(sys.stderr, level="INFO")
-# logger.level("INFO")
+    '''
+    Num     Observations     Min     Max
+    0 cart position        -4.8 4.8
+    1 cart velocity        -inf inf (often clipped to -3.0 to 3.
+    2 pole angle           -24 deg to 24 deg (approx -0.418 to 0.418 radians)
+    3 pole angular velocity -inf inf (often clipped to -3.0 to 3.0 in practice)
+    '''
 
-'''
-Num     Observations     Min     Max
-0 cart position        -4.8 4.8
-1 cart velocity        -inf inf (often clipped to -3.0 to 3.
-2 pole angle           -24 deg to 24 deg (approx -0.418 to 0.418 radians)
-3 pole angular velocity -inf inf (often clipped to -3.0 to 3.0 in practice)
-'''
+    max_degrees = None  # 设置杆子倾斜角度限制
+    train_env = gym.make('CartPole-v1', render_mode='rgb_array')
+    train_env = CartPoleWrapper(train_env, max_degrees=max_degrees)
+    agent = QLearningAgent()
+    agent.train(train_env)
+    test_env = gym.make('CartPole-v1', render_mode='human')
+    test_env = CartPoleWrapper(test_env, max_degrees=max_degrees)
+    agent.show_train_results(test_env)  
 
-max_degrees = 30  # 设置杆子倾斜角度限制
-train_env = CartPoleWrapper(gym.make('CartPole-v1'), max_degrees=max_degrees)
-agent = QLearningAgent()
-agent.train(train_env)  # 训练智能体
-show_env = CartPoleWrapper(gym.make('CartPole-v1', render_mode="human"), max_degrees=max_degrees)  
-agent.show_train_results(show_env)  # 显示训练结果
+if __name__ == "__main__":
+    test()
