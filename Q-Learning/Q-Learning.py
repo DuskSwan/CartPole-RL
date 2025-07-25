@@ -1,4 +1,5 @@
 import time, sys, math
+from pathlib import Path
 from loguru import logger
 
 import numpy as np
@@ -9,17 +10,17 @@ from gymnasium import ActionWrapper, ObservationWrapper
 
 class QLearningAgent:
     def __init__(
-            self,
-            learning_rate = 0.1,      # α, 学习率
-            discount_factor = 0.99,    # γ, 折扣因子，未来奖励的重要性
-            epsilon_start = 1.0,       # ε, 初始探索率 (100% 探索)
-            epsilon_end = 0.01,        # 最终探索率 (1% 探索)
-            epsilon_decay_rate = 0.001, # 探索率衰减速度 (每回合减少多少)
-            print_interval = 100,   # 每多少回合打印一次训练进度
-            show_delay = 0.05,      # 渲染时的延迟，单位秒
-            n_episodes = 10000,         # 训练回合数，也即总共进行多少局游戏
-            max_steps_per_episode = 300, # 每个回合的最大步数 (CartPole-v1 默认是 500，这里可以设小一点方便快速测试)
-        ):
+        self,
+        learning_rate = 0.1,      # α, 学习率
+        discount_factor = 0.99,    # γ, 折扣因子，未来奖励的重要性
+        epsilon_start = 1.0,       # ε, 初始探索率 (100% 探索)
+        epsilon_end = 0.01,        # 最终探索率 (1% 探索)
+        epsilon_decay_rate = 0.001, # 探索率衰减速度 (每回合减少多少)
+        print_interval = 100,   # 每多少回合打印一次训练进度
+        show_delay = 0.05,      # 渲染时的延迟，单位秒
+        n_episodes = 10000,         # 训练回合数，也即总共进行多少局游戏
+        max_steps_per_episode = 300, # 每个回合的最大步数 (CartPole-v1 默认是 500，这里可以设小一点方便快速测试)
+    ):
         self.learning_rate = learning_rate
         self.discount_factor = discount_factor
         self.epsilon_start = epsilon_start
@@ -87,6 +88,22 @@ class QLearningAgent:
         env.close()
         self.draw_train_score(rewards_per_episode)  # 绘制训练过程中每个回合的总奖励
     
+    def save_q_table(self, filename):
+        """
+        保存 Q 表到文件。
+        :param filename: 保存的文件名。
+        """
+        assert self.q_table is not None, "请先训练智能体！"
+        np.save(filename, self.q_table)
+    
+    def load_q_table(self, filename):
+        """
+        从文件加载 Q 表。
+        :param filename: 要加载的文件名。
+        """
+        self.q_table = np.load(filename)
+        print(f"Q 表已从 {filename} 加载。")
+
     def draw_train_score(self, rewards_per_episode):
         """
         绘制训练过程中每个回合的总奖励。
@@ -102,6 +119,10 @@ class QLearningAgent:
 
     def show_train_results(self, env):
         assert self.q_table is not None, "请先训练智能体！"
+        assert self.q_table.shape[0] == env.observation_space.n, \
+            f"Q 表的状态空间维度 {self.q_table.shape[0]} 与环境的状态空间维度 {env.observation_space.n} 不匹配！"
+        assert self.q_table.shape[1] == env.action_space.n, \
+            f"Q 表的动作空间维度 {self.q_table.shape[1]} 与环境的动作空间维度 {env.action_space.n} 不匹配！"
 
         observation, info = env.reset()
         current_state = observation
@@ -124,7 +145,7 @@ class QLearningAgent:
         print(f"评估完成！总评估奖励: {total_eval_reward} (运行了 {eval_steps} 步).")
 
 class CartPoleWrapper(ObservationWrapper):
-    def __init__(self, env, max_degrees=None, num_bins=(2, 2, 6, 3)):
+    def __init__(self, env, max_degrees=None, num_bins=(2, 2, 8, 5)):
         super().__init__(env)
         self.origin_observation_space = env.observation_space
         self.num_bins = num_bins
@@ -192,7 +213,13 @@ def test():
     train_env = gym.make('CartPole-v1', render_mode='rgb_array')
     train_env = CartPoleWrapper(train_env, max_degrees=max_degrees)
     agent = QLearningAgent()
-    agent.train(train_env)
+
+    # agent.train(train_env)
+    # saved_q_table = Path(__file__).parent / "q_table.npy"
+    # agent.save_q_table(saved_q_table)  # 保存 Q 表
+
+    agent.load_q_table(Path(__file__).parent / "q_table.npy")  # 加载 Q 表
+
     test_env = gym.make('CartPole-v1', render_mode='human')
     test_env = CartPoleWrapper(test_env, max_degrees=max_degrees)
     agent.show_train_results(test_env)  
