@@ -15,3 +15,4 @@
 
 `manual_play.py`: 让玩家自己玩一下
 `DQN.py`: 训练与测试脚本
+`model.py`: 定义DQN使用的模型

@@ -7,6 +7,8 @@ from collections import deque # 双端队列，用于回放缓冲区
 import random
 import matplotlib.pyplot as plt
 import time
+from pathlib import Path
+from loguru import logger
 
 from model import QLinear, QResNet # 导入自定义的 Q 网络模型
 
@@ -58,7 +60,7 @@ class DQNAgent:
         max_episodes=1000, # 最大训练回合数
         max_steps_per_episode=1000, # 每回合最大步数
         replay_buffer_capacity=100_000, # 回放缓冲区容量
-        full_score=200, # 完全得分 (LunarLander-v3 的目标是 200 分)
+        full_score=None, # 满分
         show_delay=0.05 # 渲染时的延迟，单位秒
     ):
         self.action_dim = action_dim
@@ -124,6 +126,7 @@ class DQNAgent:
         """
         # 如果缓冲区中的经验不足以构成一个批次，则不学习
         if len(self.replay_buffer) < self.batch_size:
+            logger.info("回放缓冲区经验不足，跳过学习步骤。")
             return
 
         # 从缓冲区采样一个批次
@@ -174,17 +177,17 @@ class DQNAgent:
             current_episode_reward = 0.0
 
             for step in range(self.max_steps_per_episode):
-                action = agent.select_action(current_state, episode) # 智能体选择动作
+                action = self.select_action(current_state, episode) # 智能体选择动作
 
                 new_observation, reward, terminated, truncated, info = train_env.step(action)
                 new_state = new_observation
                 current_episode_reward += float(reward)
 
                 # 将经验存储到回放缓冲区
-                agent.replay_buffer.push(current_state, action, reward, new_state, done)
+                self.replay_buffer.push(current_state, action, reward, new_state, done)
 
                 # 每步都尝试学习（如果缓冲区有足够数据）
-                agent.update_current_network()
+                self.update_current_network()
 
                 current_state = new_state
                 if terminated or truncated:
@@ -194,24 +197,24 @@ class DQNAgent:
             rewards_per_episode.append(current_episode_reward)
 
             # 定期更新目标网络
-            if (episode + 1) % agent.target_update_freq == 0:
-                agent.target_net.load_state_dict(agent.current_net.state_dict())
+            if (episode + 1) % self.target_update_freq == 0:
+                self.target_net.load_state_dict(self.current_net.state_dict())
                 print(f"--- 目标网络已更新 (回合 {episode + 1}) ---")
 
             # 打印训练进度
             if (episode + 1) % 100 == 0:
                 avg_reward = np.mean(rewards_per_episode[-100:])
                 print(f"回合 {episode + 1}/{self.max_episodes}, 平均奖励 (最近100回合): {avg_reward:.2f}, "
-                      f"Epsilon: {agent.epsilon_end + (agent.epsilon_start - agent.epsilon_end) * np.exp(-agent.epsilon_decay * episode):.4f}")
+                      f"Epsilon: {self.epsilon_end + (self.epsilon_start - self.epsilon_end) * np.exp(-self.epsilon_decay * episode):.4f}")
 
                 # 达到一定平均奖励后停止训练 (可选)
                 # LunarLander 的目标是 200 分以上
-                if avg_reward >= self.full_score:
+                if self.full_score and avg_reward >= self.full_score:
                     print(f"智能体已学会着陆！在 {episode + 1} 回合平均奖励 {avg_reward:.2f} 达到满分 {self.full_score} 。")
                     break
         
         print("\nDQN 训练完成！")
-        self.draw_train_score(rewards_per_episode)  # 绘制训练过程中每个回合的总奖励
+        # self.draw_train_score(rewards_per_episode)  # 绘制训练过程中每个回合的总奖励
         return rewards_per_episode
 
     def show_train_results(self, env):
@@ -243,13 +246,13 @@ class DQNAgent:
         绘制训练过程中每个回合的总奖励。
         :param rewards_per_episode: 每个回合的总奖励列表
         """
-        plt.figure(figsize=(12, 6))
-        plt.plot(rewards_per_episode)
-        plt.title('DQN 训练过程中每回合的总奖励')
-        plt.xlabel('回合数')
-        plt.ylabel('总奖励')
-        plt.grid(True)
-        plt.show()
+        # plt.figure(figsize=(12, 6))
+        # plt.plot(rewards_per_episode)
+        # plt.title('DQN rewards per Episode')
+        # plt.xlabel('Episode')
+        # plt.ylabel('Total Reward')
+        # plt.grid(True)
+        # plt.show()
 
         # 绘制移动平均
         N = 100 # 移动平均窗口大小
@@ -257,9 +260,9 @@ class DQNAgent:
             running_avg_rewards = np.convolve(rewards_per_episode, np.ones(N)/N, mode='valid')
             plt.figure(figsize=(12, 6))
             plt.plot(running_avg_rewards)
-            plt.title(f'DQN 训练过程中每回合总奖励的 {N} 回合移动平均')
-            plt.xlabel('回合数')
-            plt.ylabel('平均总奖励')
+            plt.title(f'DQN Running Average Rewards (N={N})')
+            plt.xlabel('Episode')
+            plt.ylabel('Average Total Reward')
             plt.grid(True)
             plt.show()
     
@@ -279,95 +282,14 @@ class DQNAgent:
         """
         self.current_net.load_state_dict(torch.load(filename, map_location=self.device))
         self.current_net.eval()
+        self.target_net.load_state_dict(self.current_net.state_dict()) # 同步目标网络
+        self.target_net.eval() # 目标网络也设置为评估模式
+        print(f"模型已从 {filename} 加载。")
 
-# --- 主训练函数 ---
-def train_dqn(agent, train_env, eval_env, n_episodes=1000, max_steps_per_episode=1000):
-    rewards_per_episode = []
-
-    for episode in range(n_episodes):
-        observation, info = train_env.reset()
-        current_state = observation
-        done = False
-        current_episode_reward = 0
-
-        for step in range(max_steps_per_episode):
-            action = agent.select_action(current_state, episode) # 智能体选择动作
-
-            new_observation, reward, terminated, truncated, info = train_env.step(action)
-            new_state = new_observation
-            current_episode_reward += reward
-
-            # 将经验存储到回放缓冲区
-            agent.replay_buffer.push(current_state, action, reward, new_state, terminated or truncated)
-
-            # 每步都尝试学习（如果缓冲区有足够数据）
-            agent.update_target_network()
-
-            current_state = new_state
-            if terminated or truncated:
-                done = True
-                break
-        
-        rewards_per_episode.append(current_episode_reward)
-
-        # 定期更新目标网络
-        if (episode + 1) % agent.target_update_freq == 0:
-            agent.target_net.load_state_dict(agent.current_net.state_dict())
-            print(f"--- 目标网络已更新 (回合 {episode + 1}) ---")
-
-        # 打印训练进度
-        if (episode + 1) % 100 == 0:
-            avg_reward = np.mean(rewards_per_episode[-100:])
-            print(f"回合 {episode + 1}/{n_episodes}, 平均奖励 (最近100回合): {avg_reward:.2f}, Epsilon: {agent.epsilon_end + (agent.epsilon_start - agent.epsilon_end) * np.exp(-agent.epsilon_decay * episode):.4f}")
-
-            # 达到一定平均奖励后停止训练 (可选)
-            # LunarLander 的目标是 200 分以上
-            if avg_reward >= 200:
-                print(f"智能体已学会着陆！在 {episode + 1} 回合达到平均奖励 {avg_reward:.2f}")
-                break
-    
-    print("\nDQN 训练完成！")
-    return rewards_per_episode
-
-def evaluate_dqn(agent, eval_env, num_eval_episodes=5, max_steps_per_episode=1000):
+def LunarLanderDQN():
     """
-    评估训练好的 DQN 智能体，并进行可视化。
+    主函数：创建环境，初始化 DQN 智能体，训练并展示结果。
     """
-    print("\n开始评估训练好的智能体 (可视化)...")
-    total_rewards = []
-
-    for episode in range(num_eval_episodes):
-        observation, info = eval_env.reset()
-        current_state = observation
-        done = False
-        episode_reward = 0
-        eval_steps = 0
-
-        while not done and eval_steps < max_steps_per_episode:
-            # 评估时只进行利用，不探索
-            state_tensor = torch.tensor(current_state, dtype=torch.float32).unsqueeze(0).to(agent.device)
-            with torch.no_grad():
-                action = agent.current_net(state_tensor).argmax(1).item()
-
-            new_observation, reward, terminated, truncated, info = eval_env.step(action)
-            eval_env.render() # 渲染当前帧
-            new_state = new_observation
-            episode_reward += reward
-            eval_steps += 1
-            current_state = new_state
-            if terminated or truncated:
-                done = True
-            time.sleep(0.05) # 动画延迟
-
-        total_rewards.append(episode_reward)
-        print(f"评估回合 {episode + 1}/{num_eval_episodes}, 总奖励: {episode_reward:.2f} (运行了 {eval_steps} 步).")
-    
-    eval_env.close()
-    print(f"评估完成！平均评估奖励: {np.mean(total_rewards):.2f}.")
-
-
-# --- 5. 主程序运行 ---
-if __name__ == "__main__":
     # 检查是否有 GPU 可用
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"使用设备: {device}")
@@ -387,10 +309,21 @@ if __name__ == "__main__":
     print(f"动作数量: {action_dim}")
 
     # 初始化 DQN Agent
-    agent = DQNAgent(observation_dim, action_dim, device)
+    agent = DQNAgent(observation_dim, action_dim, device, 
+                     max_episodes=3000, 
+                     max_steps_per_episode=500,
+                     epsilon_decay=0.0008, # 探索率衰减速度更慢
+                     replay_buffer_capacity=10_000,
+                     )
 
     # 训练 DQN
     rewards_history = agent.train(train_env)
+    save_path = Path(__file__).parent / "dqn_lunarlander.pth"
+    agent.save_model(save_path)  # 保存训练好的模型
+
+    # 加载模型
+    # load_path = Path(__file__).parent / "dqn_lunarlander.pth"
+    # agent.load_model(load_path)
 
     # 展示训练结果
     agent.show_train_results(eval_env)
@@ -399,3 +332,47 @@ if __name__ == "__main__":
     train_env.close()
     eval_env.close()
     print("\n所有环境已关闭。程序执行完毕。")
+
+def CartPoleDQN():
+    """
+    主函数：创建 CartPole 环境，初始化 DQN 智能体，训练并展示结果。
+    """
+    # 检查是否有 GPU 可用
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    print(f"使用设备: {device}")
+    train_env = gym.make("CartPole-v1")
+    eval_env = gym.make("CartPole-v1", render_mode="human")
+    # 获取环境信息
+    observation_dim = train_env.observation_space.shape[0]
+    action_dim = train_env.action_space.n
+
+    print(f"观测维度: {observation_dim}")
+    print(f"动作数量: {action_dim}")
+    # 初始化 DQN Agent
+    agent = DQNAgent(observation_dim, action_dim, device,
+                     lr=0.00005,
+                     batch_size=64, 
+                     replay_buffer_capacity=10_000,
+                     max_episodes=4000, 
+                     max_steps_per_episode=300,
+                     epsilon_decay=0.0005, # 探索率衰减速度更快
+                     target_update_freq=200, # 每 200 回合更新一次目标网络
+                     )
+    # 训练 DQN
+    rewards_history = agent.train(train_env)
+    agent.draw_train_score(rewards_history)  # 绘制训练过程中每个回合的总奖励
+    save_path = Path(__file__).parent / "dqn_cartpole.pth"
+    agent.save_model(save_path)
+    # 加载模型
+    # load_path = Path(__file__).parent / "dqn_cartpole.pth"
+    # agent.load_model(load_path)
+    # 展示训练结果
+    agent.show_train_results(eval_env)
+    # 关闭环境
+    train_env.close()
+    eval_env.close()
+    print("\n所有环境已关闭。程序执行完毕。")
+
+if __name__ == "__main__":
+    LunarLanderDQN()
+    # CartPoleDQN()

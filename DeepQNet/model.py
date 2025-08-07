@@ -37,7 +37,7 @@ class ResNetBlock(nn.Module):
         return out
 
 class QResNet(nn.Module):
-    def __init__(self, observation_dim, action_dim, hidden_dims=(128, 64)):
+    def __init__(self, observation_dim, action_dim, hidden_dims=(128, 64, 32)):
         super().__init__()
         self.fc0 = nn.Linear(observation_dim, hidden_dims[0])
         self.relu = nn.ReLU()
